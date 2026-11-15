@@ -1,6 +1,6 @@
 import type { Dispatch } from 'react';
 import { objectLabel } from '../checks';
-import { newName, newNumber, newStripe } from '../model/defaults';
+import { newEllipse, newName, newNumber, newRectangle, newStripe } from '../model/defaults';
 import { swatch } from '../model/swatches';
 import type { DesignObject, Doc } from '../model/types';
 import type { Built } from '../render/build';
@@ -10,12 +10,14 @@ interface Props {
   doc: Doc;
   built: Map<string, Built>;
   selectedId: string | null;
+  extraIds: string[];
+  onImport: () => void;
   dispatch: Dispatch<Action>;
 }
 
 const mm = (v: number) => Math.round(v).toLocaleString('en-GB');
 
-export function Pieces({ doc, built, selectedId, dispatch }: Props) {
+export function Pieces({ doc, built, selectedId, extraIds, onImport, dispatch }: Props) {
   const add = (make: (x: number, y: number) => DesignObject) => {
     const x = Math.round(doc.artboard.width * 0.1);
     const y = Math.round(doc.artboard.height * 0.5);
@@ -40,6 +42,18 @@ export function Pieces({ doc, built, selectedId, dispatch }: Props) {
             <span className="glyph stripes" aria-hidden="true" />
             Stripe
           </button>
+          <button type="button" onClick={() => add(newRectangle)}>
+            <span className="glyph box" aria-hidden="true" />
+            Rectangle
+          </button>
+          <button type="button" onClick={() => add(newEllipse)}>
+            <span className="glyph round" aria-hidden="true" />
+            Circle
+          </button>
+          <button type="button" onClick={onImport}>
+            <span className="glyph" aria-hidden="true">svg</span>
+            Logo from SVG file
+          </button>
         </div>
       </section>
       <section>
@@ -50,13 +64,13 @@ export function Pieces({ doc, built, selectedId, dispatch }: Props) {
           <ul className="piece-list">
             {ordered.map((o) => {
               const box = built.get(o.id)?.box;
-              const color = swatch(o.type === 'stripe' ? o.color : o.fill).rgb;
+              const color = swatch(o.type === 'stripe' ? o.color : o.type === 'shape' ? (o.parts[0]?.color ?? 'black') : o.fill).rgb;
               return (
                 <li key={o.id}>
                   <button
                     type="button"
-                    aria-pressed={o.id === selectedId}
-                    onClick={() => dispatch({ type: 'select', id: o.id })}
+                    aria-pressed={o.id === selectedId || extraIds.includes(o.id)}
+                    onClick={(e) => dispatch({ type: 'select', id: o.id, add: e.shiftKey })}
                   >
                     <span className="dot" style={{ background: color }} aria-hidden="true" />
                     <span className="piece-name">{objectLabel(o)}</span>
@@ -67,6 +81,7 @@ export function Pieces({ doc, built, selectedId, dispatch }: Props) {
             })}
           </ul>
         )}
+        {ordered.length > 1 && <p className="hint tip">Hold Shift and click to select several shapes and combine them.</p>}
       </section>
     </aside>
   );

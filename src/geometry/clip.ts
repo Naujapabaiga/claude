@@ -62,3 +62,42 @@ export function outerOnly(rings: Ring[]): Ring[] {
   const merged = unionClipper(toClipper(rings));
   return fromClipper(merged.filter((p) => ClipperLib.Clipper.Orientation(p)));
 }
+
+/** Turns stroked lines into filled outlines of the given width. */
+export function strokeToRings(
+  lines: Ring[],
+  closed: boolean,
+  width: number,
+  join: Corner,
+  cap: 'butt' | 'round' | 'square' = 'butt'
+): Ring[] {
+  if (lines.length === 0 || width <= 0) return [];
+  const co = new ClipperLib.ClipperOffset(4, 5);
+  const end = closed
+    ? ClipperLib.EndType.etClosedLine
+    : cap === 'round'
+      ? ClipperLib.EndType.etOpenRound
+      : cap === 'square'
+        ? ClipperLib.EndType.etOpenSquare
+        : ClipperLib.EndType.etOpenButt;
+  co.AddPaths(toClipper(lines), join === 'round' ? ClipperLib.JoinType.jtRound : ClipperLib.JoinType.jtMiter, end);
+  const out = new ClipperLib.Paths();
+  co.Execute(out, (width / 2) * SCALE);
+  return fromClipper(unionClipper(out));
+}
+
+/** Area (mm²) shared by two sets of outlines. */
+export function overlapArea(a: Ring[], b: Ring[]): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(toClipper(a), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPaths(toClipper(b), ClipperLib.PolyType.ptClip, true);
+  const out = new ClipperLib.Paths();
+  clipper.Execute(
+    ClipperLib.ClipType.ctIntersection,
+    out,
+    ClipperLib.PolyFillType.pftNonZero,
+    ClipperLib.PolyFillType.pftNonZero
+  );
+  return Math.abs(fromClipper(out).reduce((sum, r) => sum + ringArea(r), 0));
+}

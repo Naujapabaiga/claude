@@ -51,6 +51,31 @@ export function slant(deg: number): Matrix {
   return [1, 0, -Math.tan(rad(deg)), 1, 0, 0];
 }
 
+export function scaling(sx: number, sy: number): Matrix {
+  return [sx, 0, 0, sy, 0, 0];
+}
+
+export function invert(m: Matrix): Matrix {
+  const det = m[0] * m[3] - m[1] * m[2] || 1e-12;
+  return [
+    m[3] / det,
+    -m[1] / det,
+    -m[2] / det,
+    m[0] / det,
+    (m[2] * m[5] - m[3] * m[4]) / det,
+    (m[1] * m[4] - m[0] * m[5]) / det,
+  ];
+}
+
+export function ringsToPath(rings: Ring[]): Path {
+  const out: Path = [];
+  for (const r of rings) {
+    r.forEach((p, i) => out.push({ t: i === 0 ? 'M' : 'L', x: p.x, y: p.y }));
+    out.push({ t: 'Z' });
+  }
+  return out;
+}
+
 export function applyToPoint(m: Matrix, x: number, y: number): Point {
   return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
 }

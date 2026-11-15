@@ -5,10 +5,16 @@ import { buildPdf } from './export/pdf';
 import { place } from './export/placed';
 import { buildSvg } from './export/svg';
 import { loadFonts } from './fonts/browser';
+import { addPointAfter, deleteAnchor } from './geometry/nodes';
+import type { BooleanOp } from './geometry/paperOps';
+import { newShape } from './model/defaults';
+import type { ShapeObject } from './model/types';
+import { combineShapes } from './shapes';
+import { importSvg } from './svgImport';
 import type { FontSet } from './geometry/text';
 import { buildKey, buildObject, type Built } from './render/build';
 import { initialState, parseDoc, reducer, saveLocally } from './state';
-import { Canvas, type ViewMode } from './ui/Canvas';
+import { Canvas, type NodeRef, type ViewMode } from './ui/Canvas';
 import { Inspector } from './ui/Inspector';
 import { Pieces } from './ui/Pieces';
 
@@ -19,7 +25,10 @@ export function App() {
   const [mode, setMode] = useState<ViewMode>('production');
   const [notice, setNotice] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const { doc, selectedId } = state;
+  const svgInput = useRef<HTMLInputElement>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [activeNode, setActiveNode] = useState<NodeRef | null>(null);
+  const { doc, selectedId, extraIds } = state;
 
   useEffect(() => {
     loadFonts().then(setFonts, (e: Error) => setFontError(e.message));
@@ -46,6 +55,77 @@ export function App() {
 
   const warnings = useMemo(() => (fonts ? runChecks(doc, built) : []), [doc, built, fonts]);
   const selected = doc.objects.find((o) => o.id === selectedId) ?? null;
+  const extraShapes = doc.objects.filter((o): o is ShapeObject => o.type === 'shape' && extraIds.includes(o.id));
+  const editing = selected?.type === 'shape' && selected.id === editingId ? selected : null;
+
+  // Point editing ends when the shape is deselected or removed.
+  useEffect(() => {
+    if (editingId && selectedId !== editingId) {
+      setEditingId(null);
+      setActiveNode(null);
+    }
+  }, [editingId, selectedId]);
+
+  const pointAction = (action: 'add' | 'delete') => {
+    if (!editing || !activeNode) return;
+    const part = editing.parts[activeNode.part];
+    if (!part) return;
+    let path = part.path;
+    let next: NodeRef | null = null;
+    if (action === 'add') {
+      const added = addPointAfter(path, activeNode.index);
+      if (!added) return;
+      path = added.path;
+      next = { part: activeNode.part, index: added.index };
+    } else {
+      path = deleteAnchor(path, activeNode.index);
+      if (path === part.path) {
+        setNotice('A shape needs at least three points.');
+        return;
+      }
+    }
+    const parts = editing.parts.map((p, i) => (i === activeNode.part ? { ...p, path } : p));
+    dispatch({ type: 'update', id: editing.id, patch: { parts }, at: Date.now() });
+    setActiveNode(next);
+  };
+
+  const combine = (op: BooleanOp) => {
+    if (selected?.type !== 'shape' || extraShapes.length === 0) return;
+    const ids = [selected.id, ...extraShapes.map((s) => s.id)];
+    const ordered = doc.objects.filter((o): o is ShapeObject => o.type === 'shape' && ids.includes(o.id));
+    try {
+      const result = combineShapes(ordered, op);
+      if (!result) {
+        setNotice('Nothing is left after that. The shapes may not overlap.');
+        return;
+      }
+      dispatch({ type: 'combine', removeIds: ids, object: result, at: Date.now() });
+    } catch {
+      setNotice('These shapes could not be combined. Try simplifying them first.');
+    }
+  };
+
+  const importLogo = async (file: File) => {
+    try {
+      const result = importSvg(await file.text());
+      const shape = newShape(file.name.replace(/\.svg$/i, ''), result.parts, 0, 0);
+      // Logos larger than the sheet are scaled down to fit; smaller ones keep their real size.
+      const fitScale = Math.min(1, (doc.artboard.width * 0.6) / result.width, (doc.artboard.height * 0.6) / result.height);
+      const placed = {
+        ...shape,
+        lockRatio: true,
+        sx: fitScale,
+        sy: fitScale,
+        x: Math.round((doc.artboard.width - result.width * fitScale) / 2),
+        y: Math.round((doc.artboard.height - result.height * fitScale) / 2),
+      };
+      dispatch({ type: 'add', object: placed, at: Date.now() });
+      const size = `${Math.round(result.width * fitScale)} × ${Math.round(result.height * fitScale)} mm`;
+      setNotice(result.notes.length > 0 ? `Imported at ${size}. Note: ${result.notes.join('; ')}.` : `Imported ${file.name} at ${size}.`);
+    } catch (e) {
+      setNotice(`${file.name} could not be imported. ${e instanceof Error ? e.message : ''}`);
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -62,12 +142,18 @@ export function App() {
         dispatch({ type: 'redo' });
       } else if (!typing && selected) {
         const at = Date.now();
-        if (e.key === 'Delete' || e.key === 'Backspace') {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && editing) {
+          e.preventDefault();
+          if (activeNode) pointAction('delete');
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
           e.preventDefault();
           dispatch({ type: 'remove', id: selected.id, at });
         } else if (mod && e.key.toLowerCase() === 'd') {
           e.preventDefault();
           dispatch({ type: 'duplicate', id: selected.id, at });
+        } else if (e.key === 'Escape' && editing) {
+          setEditingId(null);
+          setActiveNode(null);
         } else if (e.key === 'Escape') {
           dispatch({ type: 'select', id: null });
         } else if (e.key.startsWith('Arrow')) {
@@ -87,7 +173,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected]);
+  });
 
   const exportPdf = () => {
     download(buildPdf(doc, place(doc.objects, built)) as BlobPart, 'application/pdf', `${fileStem(doc.name)}.pdf`);
@@ -172,7 +258,25 @@ export function App() {
         </div>
       </header>
 
-      <Pieces doc={doc} built={built} selectedId={selectedId} dispatch={dispatch} />
+      <Pieces
+        doc={doc}
+        built={built}
+        selectedId={selectedId}
+        extraIds={extraIds}
+        onImport={() => svgInput.current?.click()}
+        dispatch={dispatch}
+      />
+      <input
+        ref={svgInput}
+        type="file"
+        accept=".svg,image/svg+xml"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void importLogo(file);
+          e.target.value = '';
+        }}
+      />
 
       <main className="stage">
         {fontError ? (
@@ -180,7 +284,17 @@ export function App() {
         ) : !fonts ? (
           <p className="stage-message">Loading fonts…</p>
         ) : (
-          <Canvas doc={doc} built={built} selectedId={selectedId} mode={mode} dispatch={dispatch} />
+          <Canvas
+            doc={doc}
+            built={built}
+            selectedId={selectedId}
+            extraIds={extraIds}
+            mode={mode}
+            editingId={editing?.id ?? null}
+            activeNode={activeNode}
+            onActiveNode={setActiveNode}
+            dispatch={dispatch}
+          />
         )}
         {notice && (
           <p className="notice" role="status">
@@ -189,7 +303,22 @@ export function App() {
         )}
       </main>
 
-      <Inspector doc={doc} selected={selected} built={built} warnings={warnings} dispatch={dispatch} />
+      <Inspector
+        doc={doc}
+        selected={selected}
+        built={built}
+        warnings={warnings}
+        extraShapes={extraShapes}
+        editing={editing !== null}
+        hasActivePoint={activeNode !== null}
+        onCombine={combine}
+        onEditPoints={(on) => {
+          setEditingId(on && selected ? selected.id : null);
+          setActiveNode(null);
+        }}
+        onPointAction={pointAction}
+        dispatch={dispatch}
+      />
     </div>
   );
 }

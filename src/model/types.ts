@@ -57,7 +57,33 @@ export interface StripeObject {
   color: SwatchId;
 }
 
-export type DesignObject = LetteringObject | StripeObject;
+export interface ShapePart {
+  /** Outline in the shape's own coordinates, in mm at natural size. */
+  path: import('../geometry/path').Path;
+  /** A palette swatch id, or any colour as #rrggbb. */
+  color: string;
+}
+
+export interface ShapeObject {
+  id: string;
+  type: 'shape';
+  name: string;
+  /** Where the shape's own origin sits on the sheet. */
+  x: number;
+  y: number;
+  rotation: number;
+  /** Stretch applied to the natural size. */
+  sx: number;
+  sy: number;
+  lockRatio: boolean;
+  /** Back to front. */
+  parts: ShapePart[];
+  cutMode: 'contour' | 'singlePiece';
+  plateMargin: number;
+  plateColor: SwatchId | null;
+}
+
+export type DesignObject = LetteringObject | StripeObject | ShapeObject;
 
 export interface Doc {
   version: 1;

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch } from 'react';
-import { pathToSvg, ringsToSvg } from '../geometry/path';
+import { handlesOf, listAnchors, moveAnchor, moveHandle } from '../geometry/nodes';
+import { applyToPoint, invert, pathToSvg, ringsToSvg } from '../geometry/path';
 import { swatch } from '../model/swatches';
 import type { Doc } from '../model/types';
-import type { Built } from '../render/build';
+import { shapeMatrix, type Built } from '../render/build';
 import type { Action } from '../state';
 
 export type ViewMode = 'production' | 'finished';
@@ -11,8 +12,19 @@ interface Props {
   doc: Doc;
   built: Map<string, Built>;
   selectedId: string | null;
+  extraIds: string[];
   mode: ViewMode;
+  /** Shape whose points are being edited, if any. */
+  editingId: string | null;
+  activeNode: NodeRef | null;
+  onActiveNode: (node: NodeRef | null) => void;
   dispatch: Dispatch<Action>;
+}
+
+/** A point on a shape: which part, and which path command holds it. */
+export interface NodeRef {
+  part: number;
+  index: number;
 }
 
 interface View {
@@ -49,9 +61,10 @@ function drawn(b: Built): Drawn {
 
 type Drag =
   | { kind: 'pan'; startX: number; startY: number; tx: number; ty: number; moved: boolean }
-  | { kind: 'move'; id: string; startX: number; startY: number; x: number; y: number };
+  | { kind: 'move'; id: string; startX: number; startY: number; x: number; y: number }
+  | { kind: 'node'; part: number; index: number; which: 0 | 1 | 2 };
 
-export function Canvas({ doc, built, selectedId, mode, dispatch }: Props) {
+export function Canvas({ doc, built, selectedId, extraIds, mode, editingId, activeNode, onActiveNode, dispatch }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const readoutRef = useRef<HTMLSpanElement>(null);
   const [size, setSize] = useState({ w: 800, h: 500 });
@@ -60,6 +73,9 @@ export function Canvas({ doc, built, selectedId, mode, dispatch }: Props) {
   const drag = useRef<Drag | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
+
+  const editingObject = doc.objects.find((o) => o.id === editingId);
+  const editing = editingObject?.type === 'shape' ? editingObject : null;
 
   const fit = useCallback(
     (w: number, h: number) => {
@@ -127,8 +143,15 @@ export function Canvas({ doc, built, selectedId, mode, dispatch }: Props) {
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
     const target = (e.target as Element).closest('[data-object-id]');
+    const node = (e.target as Element).closest('[data-node]');
     e.currentTarget.setPointerCapture(e.pointerId);
-    if (target) {
+    if (node) {
+      const [part, index, which] = node.getAttribute('data-node')!.split(':').map(Number);
+      drag.current = { kind: 'node', part, index, which: which as 0 | 1 | 2 };
+      if (which === 0) onActiveNode({ part, index });
+    } else if (target && e.shiftKey) {
+      dispatch({ type: 'select', id: target.getAttribute('data-object-id'), add: true });
+    } else if (target) {
       const id = target.getAttribute('data-object-id')!;
       const obj = doc.objects.find((o) => o.id === id);
       if (!obj) return;
@@ -150,6 +173,18 @@ export function Canvas({ doc, built, selectedId, mode, dispatch }: Props) {
       const dy = e.clientY - d.startY;
       if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
       if (d.moved) setView((v) => ({ ...v, tx: d.tx + dx, ty: d.ty + dy }));
+    } else if (d.kind === 'node') {
+      if (!editing) return;
+      const local = applyToPoint(invert(shapeMatrix(editing)), p.x - editing.x, p.y - editing.y);
+      const parts = editing.parts.map((part, i) => {
+        if (i !== d.part) return part;
+        const path =
+          d.which === 0
+            ? moveAnchor(part.path, d.index, local.x, local.y)
+            : moveHandle(part.path, { index: d.index, which: d.which }, local.x, local.y);
+        return { ...part, path };
+      });
+      dispatch({ type: 'update', id: editing.id, patch: { parts }, key: `${editing.id}:node`, at: Date.now() });
     } else {
       dispatch({
         type: 'update',
@@ -169,6 +204,7 @@ export function Canvas({ doc, built, selectedId, mode, dispatch }: Props) {
   };
 
   const selected = doc.objects.find((o) => o.id === selectedId);
+  const extras = doc.objects.filter((o) => extraIds.includes(o.id));
   const selectedBox = selected ? built.get(selected.id)?.box : null;
   const { scale, tx, ty } = view;
 
@@ -271,6 +307,66 @@ export function Canvas({ doc, built, selectedId, mode, dispatch }: Props) {
             >
               {round1(selectedBox.x2 - selectedBox.x1)} × {round1(selectedBox.y2 - selectedBox.y1)} mm
             </text>
+          </g>
+        )}
+
+        {extras.map((o) => {
+          const box = built.get(o.id)?.box;
+          return box ? (
+            <rect
+              key={o.id}
+              className="selection"
+              pointerEvents="none"
+              x={tx + (o.x + box.x1) * scale - 3}
+              y={ty + (o.y + box.y1) * scale - 3}
+              width={(box.x2 - box.x1) * scale + 6}
+              height={(box.y2 - box.y1) * scale + 6}
+            />
+          ) : null;
+        })}
+
+        {editing && (
+          <g className="nodes">
+            {editing.parts.map((part, pi) => {
+              const matrix = shapeMatrix(editing);
+              const screen = (x: number, y: number) => {
+                const p = applyToPoint(matrix, x, y);
+                return { x: tx + (editing.x + p.x) * scale, y: ty + (editing.y + p.y) * scale };
+              };
+              const active = activeNode && activeNode.part === pi ? activeNode.index : -1;
+              const anchors = listAnchors(part.path);
+              return (
+                <g key={pi}>
+                  {active >= 0 &&
+                    handlesOf(part.path, active).map((h) => {
+                      const a = part.path[active];
+                      if (a.t === 'Z') return null;
+                      const from = screen(a.x, a.y);
+                      const to = screen(h.x, h.y);
+                      return (
+                        <g key={`${h.index}:${h.which}`}>
+                          <line className="handle-line" x1={from.x} y1={from.y} x2={to.x} y2={to.y} />
+                          <circle className="handle" cx={to.x} cy={to.y} r={5} data-node={`${pi}:${h.index}:${h.which}`} />
+                        </g>
+                      );
+                    })}
+                  {anchors.map((a) => {
+                    const p = screen(a.x, a.y);
+                    return (
+                      <rect
+                        key={a.index}
+                        className={a.index === active ? 'anchor active' : 'anchor'}
+                        x={p.x - 4.5}
+                        y={p.y - 4.5}
+                        width={9}
+                        height={9}
+                        data-node={`${pi}:${a.index}:0`}
+                      />
+                    );
+                  })}
+                </g>
+              );
+            })}
           </g>
         )}
 

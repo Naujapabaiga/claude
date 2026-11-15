@@ -346,6 +346,30 @@ button:disabled {
   color: #a3201a;
 }
 
+.actions .wide {
+  grid-column: 1 / -1;
+}
+
+.actions.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.combine-hint {
+  margin-top: 12px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 12px;
+  font-size: 13px;
+}
+
+.hint.tip {
+  margin: 12px 0 0;
+}
+
 /* ------------------------------------------------------------ pieces */
 
 .add {
@@ -378,6 +402,20 @@ button:disabled {
 .glyph.stripes {
   background: repeating-linear-gradient(to bottom, var(--ink) 0 6px, transparent 6px 9px);
   transform: skewX(-18deg);
+}
+
+.glyph.box,
+.glyph.round {
+  background: transparent;
+  border: 2.5px solid var(--ink);
+  width: 30px;
+  margin: 0 2px;
+}
+
+.glyph.round {
+  width: 24px;
+  margin: 0 5px;
+  border-radius: 50%;
 }
 
 .piece-list {
@@ -525,6 +563,31 @@ button:disabled {
   fill: none;
   stroke: var(--cut);
   stroke-width: 1.25;
+  pointer-events: none;
+}
+
+/* Point editing */
+.anchor {
+  fill: #fff;
+  stroke: var(--select);
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
+.anchor.active {
+  fill: var(--select);
+}
+
+.handle {
+  fill: var(--select);
+  stroke: #fff;
+  stroke-width: 1.5;
+  cursor: pointer;
+}
+
+.handle-line {
+  stroke: var(--select);
+  stroke-width: 1;
   pointer-events: none;
 }
 

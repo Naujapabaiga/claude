@@ -10,14 +10,16 @@ import {
   multiply,
   ringsBox,
   rotation,
+  scaling,
   slant,
   transformPath,
   type Box,
+  type Matrix,
   type Path,
   type Ring,
 } from '../geometry/path';
 import { layoutText, type FontSet } from '../geometry/text';
-import type { DesignObject, LetteringObject, StripeObject, SwatchId } from '../model/types';
+import type { DesignObject, LetteringObject, ShapeObject, ShapePart, StripeObject, SwatchId } from '../model/types';
 
 export type PrintShape =
   | { kind: 'rings'; rings: Ring[]; color: SwatchId }
@@ -108,12 +110,59 @@ function buildStripe(obj: StripeObject, ctx: BuildContext): Built {
   return { print, cut: merged, box: ringsBox(merged), missing: [] };
 }
 
-export function buildObject(obj: DesignObject, ctx: BuildContext): Built {
-  return obj.type === 'lettering' ? buildLettering(obj, ctx) : buildStripe(obj, ctx);
+/** Maps a shape's own coordinates to the sheet, apart from its position. */
+export function shapeMatrix(obj: ShapeObject): Matrix {
+  return multiply(rotation(obj.rotation), scaling(obj.sx, obj.sy));
 }
+
+function buildShape(obj: ShapeObject, ctx: BuildContext): Built {
+  const matrix = shapeMatrix(obj);
+  const parts = obj.parts
+    .map((part) => {
+      const path = transformPath(part.path, matrix);
+      return { path, rings: union(flatten(path)), color: part.color };
+    })
+    .filter((p) => p.rings.length > 0);
+  if (parts.length === 0) return { print: [], cut: [], box: null, missing: [] };
+
+  const silhouette = union(parts.flatMap((p) => p.rings));
+  const print: PrintShape[] = [];
+  let cut: Ring[];
+  if (obj.cutMode === 'singlePiece') {
+    const box = ringsBox(silhouette)!;
+    const margin = Math.max(0, obj.plateMargin);
+    const reach = margin + Math.min(box.x2 - box.x1, box.y2 - box.y1) * 0.15;
+    cut = outerOnly(offset(offset(silhouette, reach, 'round'), margin - reach, 'round'));
+    if (obj.plateColor) print.push({ kind: 'rings', rings: offset(cut, ctx.bleed, 'round'), color: obj.plateColor });
+  } else {
+    cut = silhouette;
+    // Each colour grows past the cut line; the exact artwork is drawn on top, so
+    // only the bleed outside the silhouette is affected.
+    for (const p of parts) print.push({ kind: 'rings', rings: offset(p.rings, ctx.bleed, 'round'), color: p.color });
+  }
+  for (const p of parts) print.push({ kind: 'path', path: p.path, color: p.color });
+  return { print, cut, box: ringsBox(cut), missing: [] };
+}
+
+export function buildObject(obj: DesignObject, ctx: BuildContext): Built {
+  if (obj.type === 'lettering') return buildLettering(obj, ctx);
+  if (obj.type === 'stripe') return buildStripe(obj, ctx);
+  return buildShape(obj, ctx);
+}
+
+// Shape outlines can be large, so they are identified by reference instead of
+// being serialised on every render. Edits always create a new parts array.
+const partsIds = new WeakMap<ShapePart[], number>();
+let nextPartsId = 1;
 
 /** Cache key covering everything that affects local geometry (not position). */
 export function buildKey(obj: DesignObject, bleed: number): string {
+  if (obj.type === 'shape') {
+    let id = partsIds.get(obj.parts);
+    if (!id) partsIds.set(obj.parts, (id = nextPartsId++));
+    const { x: _sx, y: _sy, parts: _parts, name: _name, ...rest } = obj;
+    return `${id}|${JSON.stringify(rest)}|${bleed}`;
+  }
   const { x: _x, y: _y, ...rest } = obj;
   return JSON.stringify(rest) + '|' + bleed;
 }

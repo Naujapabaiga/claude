@@ -8,6 +8,8 @@ export interface State {
   past: Doc[];
   future: Doc[];
   selectedId: string | null;
+  /** Further pieces selected with Shift, for combining. */
+  extraIds: string[];
   /** Edits sharing a key within a short time collapse into one undo step. */
   lastKey: string | null;
   lastAt: number;
@@ -20,7 +22,8 @@ export type Action =
   | { type: 'remove'; id: string; at: number }
   | { type: 'duplicate'; id: string; at: number }
   | { type: 'reorder'; id: string; direction: 1 | -1; at: number }
-  | { type: 'select'; id: string | null }
+  | { type: 'select'; id: string | null; add?: boolean }
+  | { type: 'combine'; removeIds: string[]; object: DesignObject; at: number }
   | { type: 'load'; doc: Doc; at: number }
   | { type: 'undo' }
   | { type: 'redo' };
@@ -53,19 +56,19 @@ export function reducer(state: State, action: Action): State {
       return commit(state, { ...state.doc, ...action.patch }, action.at, action.key);
     case 'add': {
       const next = commit(state, { ...state.doc, objects: [...state.doc.objects, action.object] }, action.at);
-      return { ...next, selectedId: action.object.id };
+      return { ...next, selectedId: action.object.id, extraIds: [] };
     }
     case 'remove': {
       const objects = state.doc.objects.filter((o) => o.id !== action.id);
       const next = commit(state, { ...state.doc, objects }, action.at);
-      return { ...next, selectedId: state.selectedId === action.id ? null : state.selectedId };
+      return { ...next, selectedId: state.selectedId === action.id ? null : state.selectedId, extraIds: [] };
     }
     case 'duplicate': {
       const source = state.doc.objects.find((o) => o.id === action.id);
       if (!source) return state;
       const copy = { ...source, id: newId(), x: source.x + 20, y: source.y + 20 };
       const next = commit(state, { ...state.doc, objects: [...state.doc.objects, copy] }, action.at);
-      return { ...next, selectedId: copy.id };
+      return { ...next, selectedId: copy.id, extraIds: [] };
     }
     case 'reorder': {
       const objects = [...state.doc.objects];
@@ -75,11 +78,27 @@ export function reducer(state: State, action: Action): State {
       [objects[from], objects[to]] = [objects[to], objects[from]];
       return commit(state, { ...state.doc, objects }, action.at);
     }
-    case 'select':
-      return { ...state, selectedId: action.id };
+    case 'select': {
+      if (action.add && action.id && state.selectedId && action.id !== state.selectedId) {
+        const extraIds = state.extraIds.includes(action.id)
+          ? state.extraIds.filter((id) => id !== action.id)
+          : [...state.extraIds, action.id];
+        return { ...state, extraIds };
+      }
+      if (action.id === state.selectedId && !action.add) return state;
+      return { ...state, selectedId: action.id, extraIds: [] };
+    }
+    case 'combine': {
+      const at = state.doc.objects.findIndex((o) => action.removeIds.includes(o.id));
+      if (at < 0) return state;
+      const objects = state.doc.objects.filter((o) => !action.removeIds.includes(o.id));
+      objects.splice(at, 0, action.object);
+      const next = commit(state, { ...state.doc, objects }, action.at);
+      return { ...next, selectedId: action.object.id, extraIds: [] };
+    }
     case 'load': {
       const next = commit(state, action.doc, action.at);
-      return { ...next, selectedId: null };
+      return { ...next, selectedId: null, extraIds: [] };
     }
     case 'undo': {
       if (state.past.length === 0) return state;
@@ -90,6 +109,7 @@ export function reducer(state: State, action: Action): State {
         past: state.past.slice(0, -1),
         future: [state.doc, ...state.future],
         lastKey: null,
+        extraIds: [],
         selectedId: doc.objects.some((o) => o.id === state.selectedId) ? state.selectedId : null,
       };
     }
@@ -102,6 +122,7 @@ export function reducer(state: State, action: Action): State {
         past: [...state.past, state.doc],
         future: state.future.slice(1),
         lastKey: null,
+        extraIds: [],
         selectedId: doc.objects.some((o) => o.id === state.selectedId) ? state.selectedId : null,
       };
     }
@@ -115,7 +136,7 @@ export function parseDoc(value: unknown): Doc | null {
   if (doc.version !== 1 || !Array.isArray(doc.objects) || !doc.artboard) return null;
   if (!(doc.artboard.width > 0) || !(doc.artboard.height > 0)) return null;
   const objects = doc.objects.filter(
-    (o) => o && typeof o.id === 'string' && (o.type === 'lettering' || o.type === 'stripe')
+    (o) => o && typeof o.id === 'string' && (o.type === 'lettering' || o.type === 'stripe' || (o.type === 'shape' && Array.isArray(o.parts)))
   );
   const base = newDoc();
   return {
@@ -136,7 +157,7 @@ export function initialState(): State {
   } catch {
     // Storage can be unavailable (private windows); start with the sample design.
   }
-  return { doc, past: [], future: [], selectedId: null, lastKey: null, lastAt: 0 };
+  return { doc, past: [], future: [], selectedId: null, extraIds: [], lastKey: null, lastAt: 0 };
 }
 
 export function saveLocally(doc: Doc): void {

@@ -15,6 +15,20 @@ export const SWATCHES: Swatch[] = [
 
 const BY_ID = new Map(SWATCHES.map((s) => [s.id, s]));
 
+/** Plain RGB to CMYK conversion. Good enough for a proof; not colour-managed. */
+function hexToCmyk(hex: string): [number, number, number, number] {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const k = 1 - Math.max(r, g, b);
+  if (k >= 0.999) return [0, 0, 0, 100];
+  const f = (v: number) => Math.round(((1 - v - k) / (1 - k)) * 100);
+  return [f(r), f(g), f(b), Math.round(k * 100)];
+}
+
 export function swatch(id: SwatchId): Swatch {
-  return BY_ID.get(id) ?? SWATCHES[0];
+  const known = BY_ID.get(id);
+  if (known) return known;
+  if (/^#[0-9a-fA-F]{6}$/.test(id)) return { id, name: id.toUpperCase(), rgb: id, cmyk: hexToCmyk(id) };
+  return SWATCHES[0];
 }

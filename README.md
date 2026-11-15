@@ -10,11 +10,14 @@ size, and exporting print-and-cut files for a vinyl print shop.
 - Outlines, lean, rotation and spacing, with the finished size shown as you edit.
 - Stripes with any number of bands, gaps and angled ends.
 - Cuts each character separately or the whole name as one sticker.
+- Shapes: rectangles, circles and logos imported from SVG files, with unite,
+  subtract and intersect, and point-by-point editing of outlines and curves.
 - Exports a vector PDF: CMYK artwork with bleed, plus the cut line as a spot
   colour (`CutContour` by default) on its own layer. No fonts are embedded;
   all text is outlines.
 - Exports an SVG sized in millimetres for other design software.
-- Warns before export when artwork leaves the sheet or is too small to cut well.
+- Warns before export when artwork leaves the sheet, is too small to cut well,
+  or when two pieces overlap so their cut lines would cross.
 
 ## Run it
 
@@ -45,5 +48,5 @@ lettering. Print it at 100 % and measure the rulers.
 
 ## Not built yet
 
-Manual shape and node editing, SVG import, vehicle photo preview and AI
-generation and editing.
+A free-drawing pen tool, converting text to editable shapes, vehicle photo
+preview, and AI generation and editing.
